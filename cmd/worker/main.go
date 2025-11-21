@@ -33,6 +33,8 @@ func main() {
 	workerID := "worker-" + time.Now().Format("20060102-150405")
 	slog.Info("Worker ID", "id", workerID)
 
+	workerDelay, _ := time.ParseDuration(os.Getenv("WORKER_DELAY"))
+
 	// Main worker loop
 	for {
 		job := fetchJob(proxyURL)
@@ -51,6 +53,11 @@ func main() {
 			result = &api.JobResult{Error: err.Error()}
 		} else {
 			slog.Info("job execution completed", "event", "query.execution.completed", "job_id", job.ID, "worker_id", workerID, "duration_ms", duration.Milliseconds())
+		}
+
+		if workerDelay > 0 {
+			slog.Info("delaying result submission", "job_id", job.ID, "delay", workerDelay)
+			time.Sleep(workerDelay)
 		}
 
 		submitResult(proxyURL, job.ID, result)

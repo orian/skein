@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"skein/internal/api"
+	"sync"
 	"testing"
 	"time"
 
@@ -111,4 +113,64 @@ func TestEndToEndQueryExecution(t *testing.T) {
 
 		assert.JSONEq(t, expectedJSON, string(respBody), "The JSON response should match the expected output.")
 	})
+}
+
+func TestEndToEndConcurrentQueries(t *testing.T) {
+	// Wait for the proxy to be healthy
+	assert.Eventually(t, func() bool {
+		resp, err := http.Get(proxyURL + "/healthz")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 30*time.Second, 1*time.Second, "proxy did not become healthy")
+
+	t.Run("20 Concurrent Queries", func(t *testing.T) {
+		runQueries(t, 20)
+	})
+}
+
+// runQueries sends n queries concurrently and checks their results.
+func runQueries(t *testing.T, n int) {
+	var wg sync.WaitGroup
+	wg.Add(n)
+
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+
+			// Each query will be slightly different to avoid caching
+			paxCount := rand.Intn(5) + 1
+			query := fmt.Sprintf(`
+				SELECT count(*) as total_count
+				FROM '%s'
+				WHERE passenger_count = $pax_count;
+			`, getParquetPath())
+
+			req := api.QueryRequest{
+				UserID:   fmt.Sprintf("e2e-concurrent-%d", i),
+				Query:    query,
+				Params:   map[string]interface{}{"pax_count": paxCount},
+				Priority: api.Priority(rand.Intn(21)), // Random priority
+			}
+
+			body, err := json.Marshal(req)
+			assert.NoError(t, err)
+
+			resp, err := http.Post(proxyURL+"/query", "application/json", bytes.NewBuffer(body))
+			assert.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+			// We don't need to check the result here, just that it completes successfully.
+			// The goal is to stress the concurrent handling.
+			// A proper implementation would check the result against a known value.
+			_, err = io.ReadAll(resp.Body)
+			assert.NoError(t, err)
+		}(i)
+	}
+
+	wg.Wait()
 }

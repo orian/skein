@@ -25,6 +25,8 @@ services:
     environment:
       # Set the proxy base URL for the worker to connect to
       PROXY_BASE_URL: http://proxy:8080
+      # Set a delay for the worker to return results
+      WORKER_DELAY: 0s
     volumes:
       - ./datasets:/data # Mount datasets into worker for DuckDB to access
     depends_on:
