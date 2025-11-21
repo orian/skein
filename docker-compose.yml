@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  proxy:
+    build:
+      context: .
+      dockerfile: cmd/proxy/Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./datasets:/datasets # Mount datasets for local testing/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"] # Use the dedicated health check endpoint
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - skein-net
+
+  worker:
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: cmd/worker/Dockerfile
+    environment:
+      # Set the proxy base URL for the worker to connect to
+      PROXY_BASE_URL: http://proxy:8080
+    volumes:
+      - ./datasets:/data # Mount datasets into worker for DuckDB to access
+    depends_on:
+      proxy:
+        condition: service_healthy # Ensure proxy is healthy before starting worker
+    networks:
+      - skein-net
+    # Scale workers if needed, e.g., docker-compose up --scale worker=3
+    deploy:
+      replicas: 1 # Start with one worker, can be scaled
+
+networks:
+  skein-net:
+    driver: bridge
