@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"skein/internal/api"
@@ -60,16 +61,18 @@ func TestEndToEndQueryExecution(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "Expected OK status for simple query")
 
-		var result api.JobResult
-		err = json.NewDecoder(resp.Body).Decode(&result)
+		// Read the response body
+		respBody, err := io.ReadAll(resp.Body)
 		assert.NoError(t, err)
 
-		assert.Empty(t, result.Error, "Expected no error in job result")
-		assert.Len(t, result.Rows, 1, "Expected 1 row in result data")
+		// Define the expected JSON response
+		expectedJSON := `{
+			"column_names": ["total_count"],
+			"column_types": [{"type": "BIGINT", "nullable": false}],
+			"column_data": [[1276565]]
+		}`
 
-		count, ok := result.Rows[0]["total_count"]
-		assert.True(t, ok, "Expected column 'total_count' in result")
-		assert.Equal(t, int64(1276565), count.(int64), "Expected specific count for simple query")
+		assert.JSONEq(t, expectedJSON, string(respBody), "The JSON response should match the expected output.")
 	})
 
 	t.Run("Parameterized Query", func(t *testing.T) {
@@ -95,15 +98,17 @@ func TestEndToEndQueryExecution(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "Expected OK status for parameterized query")
 
-		var result api.JobResult
-		err = json.NewDecoder(resp.Body).Decode(&result)
+		// Read the response body
+		respBody, err := io.ReadAll(resp.Body)
 		assert.NoError(t, err)
 
-		assert.Empty(t, result.Error, "Expected no error in job result")
-		assert.Len(t, result.Rows, 1, "Expected 1 row in result data")
+		// Define the expected JSON response
+		expectedJSON := `{
+			"column_names": ["total_count"],
+			"column_types": [{"type": "BIGINT", "nullable": false}],
+			"column_data": [[1113704]]
+		}`
 
-		count, ok := result.Rows[0]["total_count"]
-		assert.True(t, ok, "Expected column 'total_count' in result")
-		assert.Equal(t, int64(1113704), count.(int64), "Expected specific count for parameterized query")
+		assert.JSONEq(t, expectedJSON, string(respBody), "The JSON response should match the expected output.")
 	})
 }
