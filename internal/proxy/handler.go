@@ -50,14 +50,15 @@ func (p *Proxy) QueryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job := &api.Job{
-		ID:        uuid.NewString(),
-		UserID:    req.UserID,
-		Query:     req.Query,
-		Params:    req.Params,
-		Priority:  req.Priority,
-		Status:    api.StatusPending,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
+		ID:               uuid.NewString(),
+		UserID:           req.UserID,
+		Query:            req.Query,
+		Params:           req.Params,
+		Priority:         req.Priority,
+		Status:           api.StatusPending,
+		CreatedAt:        time.Now().UTC(),
+		UpdatedAt:        time.Now().UTC(),
+		DisableProfiling: req.DisableProfiling,
 	}
 
 	slog.Info("query received", "event", "query.received", "job_id", job.ID, "user_id", job.UserID)
@@ -73,12 +74,44 @@ func (p *Proxy) QueryHandler(w http.ResponseWriter, r *http.Request) {
 	select {
 	case result := <-resultChan:
 		w.Header().Set("Content-Type", "application/json")
+
 		if result.Error != "" {
 			w.WriteHeader(http.StatusInternalServerError)
-		} else {
-			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(api.QueryResults{Error: result.Error})
+			return
 		}
-		json.NewEncoder(w).Encode(result)
+
+		var duckdbProfile api.DuckDBProfile
+		if len(result.Profile) > 0 {
+			if err := json.Unmarshal(result.Profile, &duckdbProfile); err != nil {
+				slog.Error("failed to unmarshal DuckDB profile", "job_id", job.ID, "error", err)
+				http.Error(w, "Internal server error: failed to process profiling data", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		queryResults := api.QueryResults{
+			ColumnNames: result.ColumnNames,
+			ColumnTypes: result.ColumnTypes,
+			ColumnData:  result.ColumnData,
+			Profile: api.ProfilingStats{
+				TotalBytesWritten: duckdbProfile.TotalBytesWritten,
+				TotalBytesRead:    duckdbProfile.TotalBytesRead,
+				RowsReturned:      duckdbProfile.RowsReturned,
+				Latency:           duckdbProfile.Latency,
+				CPUTime:           duckdbProfile.CPUTime,
+			},
+			GoProfile: api.GoProfileStats{
+				ExecuteTime: result.GoProfile.ExecuteTime,
+				QueryTime:   result.GoProfile.QueryTime,
+			},
+		}
+
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(queryResults); err != nil {
+			slog.Error("failed to encode query results", "job_id", job.ID, "error", err)
+			http.Error(w, "Internal server error: failed to encode query results", http.StatusInternalServerError)
+		}
 
 	case <-r.Context().Done():
 		// Client cancelled the request. Attempt to remove the job from the queue.

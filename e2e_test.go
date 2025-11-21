@@ -67,14 +67,31 @@ func TestEndToEndQueryExecution(t *testing.T) {
 		respBody, err := io.ReadAll(resp.Body)
 		assert.NoError(t, err)
 
-		// Define the expected JSON response
+		// Parse the response body into a QueryResults
+		var result api.QueryResults
+		err = json.Unmarshal(respBody, &result)
+		assert.NoError(t, err, "Failed to unmarshal QueryResults")
+
+		// Assert that the Profile field is present and contains valid data
+		assert.Greater(t, result.Profile.Latency, float64(0), "Expected Latency to be greater than 0")
+		assert.Greater(t, result.Profile.CPUTime, float64(0), "Expected CPUTime to be greater than 0")
+
+		// Define the expected JSON response (excluding profile for direct comparison)
 		expectedJSON := `{
 			"column_names": ["total_count"],
 			"column_types": [{"type": "BIGINT", "nullable": false}],
 			"column_data": [[1276565]]
 		}`
 
-		assert.JSONEq(t, expectedJSON, string(respBody), "The JSON response should match the expected output.")
+		// We cannot compare the latency and cpu_time directly as they vary slightly
+		// So we will parse the actual response and set the latency and cpu_time to 0 before comparing
+		var actualResult map[string]interface{}
+		err = json.Unmarshal(respBody, &actualResult)
+		assert.NoError(t, err)
+		delete(actualResult, "profile")
+		actualResultBytes, err := json.Marshal(actualResult)
+		assert.NoError(t, err)
+		assert.JSONEq(t, expectedJSON, string(actualResultBytes), "The JSON response should match the expected output.")
 	})
 
 	t.Run("Parameterized Query", func(t *testing.T) {
@@ -104,14 +121,32 @@ func TestEndToEndQueryExecution(t *testing.T) {
 		respBody, err := io.ReadAll(resp.Body)
 		assert.NoError(t, err)
 
-		// Define the expected JSON response
+		// Parse the response body into a QueryResults
+		var result api.QueryResults
+		err = json.Unmarshal(respBody, &result)
+		assert.NoError(t, err, "Failed to unmarshal QueryResults")
+
+		// Assert that the Profile field is present and contains valid data
+		assert.Greater(t, result.Profile.Latency, float64(0), "Expected Latency to be greater than 0")
+		assert.Greater(t, result.Profile.CPUTime, float64(0), "Expected CPUTime to be greater than 0")
+
+		// Define the expected JSON response (excluding profile for direct comparison)
 		expectedJSON := `{
 			"column_names": ["total_count"],
 			"column_types": [{"type": "BIGINT", "nullable": false}],
 			"column_data": [[1113704]]
 		}`
 
-		assert.JSONEq(t, expectedJSON, string(respBody), "The JSON response should match the expected output.")
+		// We cannot compare the latency and cpu_time directly as they vary slightly
+		// So we will parse the actual response and set the latency and cpu_time to 0 before comparing
+		var actualResult map[string]interface{}
+		err = json.Unmarshal(respBody, &actualResult)
+		assert.NoError(t, err)
+		delete(actualResult, "profile")
+		actualResultBytes, err := json.Marshal(actualResult)
+		assert.NoError(t, err)
+
+		assert.JSONEq(t, expectedJSON, string(actualResultBytes), "The JSON response should match the expected output.")
 	})
 }
 
@@ -164,11 +199,21 @@ func runQueries(t *testing.T, n int) {
 
 			assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-			// We don't need to check the result here, just that it completes successfully.
-			// The goal is to stress the concurrent handling.
-			// A proper implementation would check the result against a known value.
-			_, err = io.ReadAll(resp.Body)
+			// Read and parse the response body into a QueryResults
+			respBody, err := io.ReadAll(resp.Body)
 			assert.NoError(t, err)
+
+			var result api.QueryResults
+			err = json.Unmarshal(respBody, &result)
+			assert.NoError(t, err, "Failed to unmarshal QueryResults for concurrent query")
+
+			// Assert that the Profile field is present and contains valid data
+			assert.Greater(t, result.Profile.Latency, float64(0), "Expected Latency to be greater than 0 for concurrent query")
+			assert.Greater(t, result.Profile.CPUTime, float64(0), "Expected CPUTime to be greater than 0 for concurrent query")
+
+			// For simplicity in this E2E test, we'll only check the Profile and not the actual data content,
+			// as the `paxCount` is random. A more robust test would determine the expected count.
+			// The important thing here is that the request was processed and returned a valid QueryResults.
 		}(i)
 	}
 

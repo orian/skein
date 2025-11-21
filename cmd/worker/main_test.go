@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"skein/internal/api"
 	"testing"
 
@@ -11,9 +13,11 @@ func TestExecuteJob(t *testing.T) {
 	// The parquet file is in the 'datasets' directory at the project root.
 	// The test runs from 'cmd/worker', so the relative path is '../../datasets/'.
 	const query = `
-		SELECT count(*) as total_count
-		FROM '../../datasets/taxi_2019_04.parquet'
-		WHERE pickup_at BETWEEN '2019-04-15' AND '2019-04-20';
+		SELECT count(*) as total_count, avg(passenger_count)
+		FROM '../../datasets/taxi/taxi_2019_04.parquet'
+		WHERE (pickup_at BETWEEN '2019-04-15' AND '2019-04-20')
+			or (pickup_at BETWEEN '2019-05-18' AND '2019-04-25')
+			or (pickup_at BETWEEN '2019-06-01' AND '2019-06-06');
 	`
 
 	job := &api.Job{
@@ -22,7 +26,7 @@ func TestExecuteJob(t *testing.T) {
 	}
 
 	// Use an in-memory database by passing an empty dbPath.
-	result, err := executeJob(job, "")
+	result, err := ExecuteJob(context.Background(), job, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Empty(t, result.Error)
@@ -30,6 +34,10 @@ func TestExecuteJob(t *testing.T) {
 	assert.NotEmpty(t, result.ColumnNames)
 	assert.NotEmpty(t, result.ColumnTypes)
 	assert.NotEmpty(t, result.ColumnData)
+
+	// Assert that the Profile field is not empty and is valid JSON
+	assert.NotEmpty(t, result.Profile, "Expected Profile field to be present")
+	assert.True(t, json.Valid([]byte(result.Profile)), "Expected Profile field to contain valid JSON")
 
 	// Find the index of the "total_count" column
 	totalCountIndex := -1
@@ -55,7 +63,7 @@ func TestExecuteJob(t *testing.T) {
 func TestExecuteJobWithParams(t *testing.T) {
 	const query = `
 		SELECT count(*) as total_count
-		FROM '../../datasets/taxi_2019_04.parquet'
+		FROM '../../datasets/taxi/taxi_2019_04.parquet'
 		WHERE passenger_count = $pax_count;
 	`
 	job := &api.Job{
@@ -66,7 +74,7 @@ func TestExecuteJobWithParams(t *testing.T) {
 		},
 	}
 
-	result, err := executeJob(job, "")
+	result, err := ExecuteJob(context.Background(), job, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Empty(t, result.Error)
@@ -74,6 +82,10 @@ func TestExecuteJobWithParams(t *testing.T) {
 	assert.NotEmpty(t, result.ColumnNames)
 	assert.NotEmpty(t, result.ColumnTypes)
 	assert.NotEmpty(t, result.ColumnData)
+
+	// Assert that the Profile field is not empty and is valid JSON
+	assert.NotEmpty(t, result.Profile, "Expected Profile field to be present")
+	assert.True(t, json.Valid([]byte(result.Profile)), "Expected Profile field to contain valid JSON")
 
 	// Find the index of the "total_count" column
 	totalCountIndex := -1

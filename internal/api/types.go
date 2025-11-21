@@ -17,10 +17,11 @@ const (
 
 // QueryRequest is the structure of a query submission from a client.
 type QueryRequest struct {
-	UserID   string                 `json:"user_id"`
-	Query    string                 `json:"query"`
-	Params   map[string]interface{} `json:"params,omitempty"`
-	Priority Priority               `json:"priority"`
+	UserID           string                 `json:"user_id"`
+	Query            string                 `json:"query"`
+	Params           map[string]interface{} `json:"params,omitempty"`
+	Priority         Priority               `json:"priority"`
+	DisableProfiling bool                   `json:"disable_profiling,omitempty"`
 }
 
 // QueryResponse is the initial response sent to the client after a query is submitted.
@@ -40,24 +41,27 @@ const (
 
 // Job represents a query to be executed by a worker.
 type Job struct {
-	ID        string                 `json:"id"`
-	UserID    string                 `json:"user_id"`
-	Query     string                 `json:"query"`
-	Params    map[string]interface{} `json:"params,omitempty"`
-	Priority  Priority               `json:"priority"`
-	Status    JobStatus              `json:"status"`
-	CreatedAt time.Time              `json:"created_at"`
-	UpdatedAt time.Time              `json:"updated_at"`
-	Result    *JobResult             `json:"result,omitempty"`
+	ID               string                 `json:"id"`
+	UserID           string                 `json:"user_id"`
+	Query            string                 `json:"query"`
+	Params           map[string]interface{} `json:"params,omitempty"`
+	Priority         Priority               `json:"priority"`
+	Status           JobStatus              `json:"status"`
+	CreatedAt        time.Time              `json:"created_at"`
+	UpdatedAt        time.Time              `json:"updated_at"`
+	Result           *JobResult             `json:"result,omitempty"`
+	DisableProfiling bool                   `json:"disable_profiling,omitempty"`
 }
 
 // JobResult holds the outcome of a query's execution.
 // For simplicity, we'll represent results as a JSON raw message.
 type JobResult struct {
-	ColumnNames []string      `json:"column_names,omitempty"`
-	ColumnTypes []ColumnType  `json:"column_types,omitempty"`
-	ColumnData  []interface{} `json:"column_data,omitempty"`
-	Error       string        `json:"error,omitempty"`
+	ColumnNames []string        `json:"column_names,omitempty"`
+	ColumnTypes []ColumnType    `json:"column_types,omitempty"`
+	ColumnData  []interface{}   `json:"column_data,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	Profile     json.RawMessage `json:"profile,omitempty"`
+	GoProfile   GoProfileStats  `json:"go_profile,omitempty"`
 }
 
 func (r *JobResult) UnmarshalJSON(data []byte) error {
@@ -68,6 +72,8 @@ func (r *JobResult) UnmarshalJSON(data []byte) error {
 	r.ColumnNames = aux.ColumnNames
 	r.ColumnTypes = aux.ColumnTypes
 	r.ColumnData = make([]interface{}, len(aux.ColumnTypes))
+	r.Profile = aux.Profile
+	r.GoProfile = aux.GoProfile
 
 	for i, colType := range r.ColumnTypes {
 		switch colType.Type {
@@ -120,6 +126,8 @@ type internalJobResult struct {
 	ColumnTypes []ColumnType      `json:"column_types,omitempty"`
 	ColumnData  []json.RawMessage `json:"column_data,omitempty"`
 	Error       string            `json:"error,omitempty"`
+	Profile     json.RawMessage   `json:"profile,omitempty"`
+	GoProfile   GoProfileStats    `json:"go_profile,omitempty"`
 }
 
 // ColumnType holds the type and nullability information for a result column.

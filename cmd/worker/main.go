@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"path"
 	"skein/internal/api"
 	"time"
 
@@ -45,8 +47,9 @@ func main() {
 
 		slog.Info("executing job", "event", "query.execution.started", "job_id", job.ID, "worker_id", workerID)
 		startTime := time.Now()
-		result, err := executeJob(job, dbPath)
+		result, err := ExecuteJob(context.Background(), job, dbPath)
 		duration := time.Since(startTime)
+		result.GoProfile.ExecuteTime = duration
 
 		if err != nil {
 			slog.Error("job execution failed", "event", "query.execution.failed", "job_id", job.ID, "worker_id", workerID, "error", err)
@@ -91,21 +94,14 @@ func fetchJob(proxyURL string) *api.Job {
 	return &job
 }
 
-// executeJob runs the query using DuckDB.
-func executeJob(job *api.Job, dbPath string) (*api.JobResult, error) {
-	db, err := sql.Open("duckdb", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open duckdb: %w", err)
-	}
-	defer db.Close()
-
-	// Convert map[string]interface{} to a slice of any for the query args
+func runQuery(ctx context.Context, db *sql.DB, job *api.Job) (*api.JobResult, error) {
 	args := make([]any, 0, len(job.Params))
 	for k, v := range job.Params {
 		args = append(args, sql.Named(k, v))
 	}
 
-	rows, err := db.Query(job.Query, args...)
+	start := time.Now()
+	rows, err := db.QueryContext(ctx, job.Query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query execution failed: %w", err)
 	}
@@ -162,12 +158,89 @@ func executeJob(job *api.Job, dbPath string) (*api.JobResult, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error during row iteration: %w", err)
 	}
+	duration := time.Since(start)
+	slog.Info("query execution completed", "duration_ms", duration.Milliseconds())
 
 	return &api.JobResult{
 		ColumnNames: columnNames,
 		ColumnTypes: apiColumnTypes,
 		ColumnData:  columnData,
+		GoProfile: api.GoProfileStats{
+			QueryTime: duration,
+		},
 	}, nil
+}
+
+func enableProfiling(ctx context.Context, db *sql.DB, id string) (string, error) {
+	profileFileName := path.Join(os.TempDir(), id+".json")
+	slog.Info("Generated profile file name", "file", profileFileName)
+
+	_, err := db.ExecContext(ctx, "PRAGMA enable_profiling = 'json'")
+	if err != nil {
+		return "", fmt.Errorf("failed to enable profiling: %w", err)
+	}
+	_, err = db.ExecContext(ctx, fmt.Sprintf("PRAGMA profiling_output = '%s'", profileFileName))
+	if err != nil {
+		return "", fmt.Errorf("failed to set profiling output: %w", err)
+	}
+	return profileFileName, nil
+}
+
+func disableProfiling(ctx context.Context, db *sql.DB) error {
+	if _, err := db.Exec("PRAGMA disable_profiling;"); err != nil {
+		slog.Warn("failed to disable profiling", "error", err)
+	}
+	return nil
+}
+
+func collectProfileStats(profileFileName string) []byte {
+	if _, err := os.Stat(profileFileName); os.IsNotExist(err) {
+		slog.Warn("Profiling file does not exist", "file", profileFileName)
+	} else if err != nil {
+		slog.Warn("Error stating profiling file", "file", profileFileName, "error", err)
+	}
+
+	// Read profiling output
+	profileBytes, err := os.ReadFile(profileFileName)
+	if err != nil {
+		slog.Warn("failed to read profiling output file", "file", profileFileName, "error", err)
+	}
+
+	// Clean up profiling file
+	if err := os.Remove(profileFileName); err != nil {
+		slog.Warn("failed to remove profiling output file", "file", profileFileName, "error", err)
+	}
+	return profileBytes
+}
+
+// ExecuteJob runs the query using DuckDB.
+func ExecuteJob(ctx context.Context, job *api.Job, dbPath string) (*api.JobResult, error) {
+	db, err := sql.Open("duckdb", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open duckdb: %w", err)
+	}
+	defer db.Close()
+
+	var profileFileName string
+	if !job.DisableProfiling {
+		if profileFileName, err = enableProfiling(ctx, db, job.ID); err != nil {
+			return nil, fmt.Errorf("enable profiling: %w", err)
+		}
+	}
+
+	result, runSqlErr := runQuery(ctx, db, job)
+	if !job.DisableProfiling {
+		if result == nil {
+			result = &api.JobResult{}
+		}
+		result.Profile = collectProfileStats(profileFileName)
+
+		if err = disableProfiling(ctx, db); err != nil {
+			slog.Warn("failed to disable profiling", "error", err)
+		}
+	}
+
+	return result, runSqlErr
 }
 
 // submitResult sends the result of a job execution back to the proxy.
