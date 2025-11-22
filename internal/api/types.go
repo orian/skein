@@ -72,6 +72,7 @@ func (r *JobResult) UnmarshalJSON(data []byte) error {
 	r.ColumnNames = aux.ColumnNames
 	r.ColumnTypes = aux.ColumnTypes
 	r.ColumnData = make([]interface{}, len(aux.ColumnTypes))
+	r.Error = aux.Error
 	r.Profile = aux.Profile
 	r.GoProfile = aux.GoProfile
 

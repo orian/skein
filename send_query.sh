@@ -3,6 +3,7 @@
 # Configuration
 PROXY_URL="http://localhost:8080"
 QUERY="SELECT 1 as one, 2 as two;"
+QUERY="SELECT count(*) as total_count FROM './datasets/taxi/taxi_2019_04.parquet' WHERE pickup_at BETWEEN '2019-04-15' AND '2019-04-20';"
 USER_ID="test-user-bash"
 
 # Construct the JSON payload

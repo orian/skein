@@ -15,7 +15,8 @@ var testData = `{
 		["foo", "bar", "baz"],
 		[true, false, true],
 		[1.2, 3.4, 5.6]
-	]
+	],
+	"error": "łóżko"
 }`
 
 func TestInternalJobResult_UnmarshalJSON(t *testing.T) {
@@ -28,6 +29,7 @@ func TestInternalJobResult_UnmarshalJSON(t *testing.T) {
 		ColumnNames: []string{"a", "b", "c"},
 		ColumnTypes: []ColumnType{{Type: "BIGINT"}, {Type: "TEXT"}, {Type: "BOOLEAN"}, {Type: "FLOAT"}},
 		ColumnData:  []interface{}{[]int64{1, 2, 3}, []string{"foo", "bar", "baz"}, []bool{true, false, true}, []float32{1.2, 3.4, 5.6}},
+		Error:       "łóżko",
 	}
 	assert.Equal(t, want, got, "expected empty result")
 }

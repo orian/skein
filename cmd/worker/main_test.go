@@ -16,7 +16,7 @@ func TestExecuteJob(t *testing.T) {
 		SELECT count(*) as total_count, avg(passenger_count)
 		FROM '../../datasets/taxi/taxi_2019_04.parquet'
 		WHERE (pickup_at BETWEEN '2019-04-15' AND '2019-04-20')
-			or (pickup_at BETWEEN '2019-05-18' AND '2019-04-25')
+			or (pickup_at BETWEEN '2019-05-18' AND '2019-05-25')
 			or (pickup_at BETWEEN '2019-06-01' AND '2019-06-06');
 	`
 
@@ -54,7 +54,7 @@ func TestExecuteJob(t *testing.T) {
 	// The value will be of the native Go type (int64 for count), but after JSON
 	// marshalling/unmarshalling, it might become float64.
 	count := result.ColumnData[totalCountIndex].([]interface{})[0]
-	assert.Equal(t, int64(1276565), count.(int64), "expected exact count for TestExecuteJob")
+	assert.Equal(t, int64(1276575), count.(int64), "expected exact count for TestExecuteJob")
 
 	t.Logf("Query executed successfully, count: %v", count)
 }

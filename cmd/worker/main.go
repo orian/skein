@@ -5,21 +5,28 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path"
 	"skein/internal/api"
+	"skein/internal/settings"
+	"syscall"
 	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 const (
-	pollInterval = 100 * time.Millisecond
-	dbPath       = "" // Use in-memory DuckDB
+	dbPath = "" // Use in-memory DuckDB
 )
+
+var httpClient = &http.Client{
+	Timeout: settings.LongPollTimeout + (5 * time.Second), // Must be longer than the proxy's long poll timeout.
+}
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -29,37 +36,53 @@ func main() {
 	if proxyURL == "" {
 		proxyURL = "http://localhost:8080"
 	}
-	slog.Info("Using proxy URL", "url", proxyURL)
+	slog.Info("Worker starting...", "proxy_url", proxyURL)
 
-	slog.Info("Worker starting...")
-	workerID := "worker-" + time.Now().Format("20060102-150405")
-	slog.Info("Worker ID", "id", workerID)
+	// 1. Register with the proxy to get a worker ID.
+	workerID, err := register(proxyURL)
+	if err != nil {
+		slog.Error("failed to register with proxy", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("Worker registered successfully", "worker_id", workerID)
+
+	// 2. Handle graceful shutdown.
+	// This will call deregister when the process is terminated.
+	setupGracefulShutdown(proxyURL, workerID)
+
+	// 3. Start the heartbeat goroutine.
+	go runHeartbeat(proxyURL, workerID)
 
 	workerDelay, _ := time.ParseDuration(os.Getenv("WORKER_DELAY"))
 
-	// Main worker loop
+	// 4. Main job-fetching loop.
 	for {
-		job := fetchJob(proxyURL)
+		job := fetchJob(proxyURL, workerID)
 		if job == nil {
-			time.Sleep(pollInterval)
+			// This means the long poll timed out or an error occurred.
+			// The fetchJob function handles logging and backoff, so we just continue.
 			continue
 		}
 
-		slog.Info("executing job", "event", "query.execution.started", "job_id", job.ID, "worker_id", workerID)
+		slog.Info("Executing job", "event", "query.execution.started", "job_id", job.ID, "worker_id", workerID)
 		startTime := time.Now()
 		result, err := ExecuteJob(context.Background(), job, dbPath)
 		duration := time.Since(startTime)
+
+		if result == nil {
+			result = &api.JobResult{}
+		}
 		result.GoProfile.ExecuteTime = duration
 
 		if err != nil {
-			slog.Error("job execution failed", "event", "query.execution.failed", "job_id", job.ID, "worker_id", workerID, "error", err)
-			result = &api.JobResult{Error: err.Error()}
+			slog.Error("Job execution failed", "event", "query.execution.failed", "job_id", job.ID, "worker_id", workerID, "error", err)
+			result.Error = err.Error()
 		} else {
-			slog.Info("job execution completed", "event", "query.execution.completed", "job_id", job.ID, "worker_id", workerID, "duration_ms", duration.Milliseconds())
+			slog.Info("Job execution completed", "event", "query.execution.completed", "job_id", job.ID, "worker_id", workerID, "duration_ms", duration.Milliseconds())
 		}
 
 		if workerDelay > 0 {
-			slog.Info("delaying result submission", "job_id", job.ID, "delay", workerDelay)
+			slog.Info("Delaying result submission", "job_id", job.ID, "delay", workerDelay)
 			time.Sleep(workerDelay)
 		}
 
@@ -67,28 +90,95 @@ func main() {
 	}
 }
 
-// fetchJob polls the proxy for the next available job.
-func fetchJob(proxyURL string) *api.Job {
-	resp, err := http.Get(proxyURL + "/internal/job/next")
+// register contacts the proxy to get a unique worker ID.
+func register(proxyURL string) (string, error) {
+	resp, err := httpClient.Post(proxyURL+"/internal/worker/register", "application/json", nil)
 	if err != nil {
-		slog.Error("failed to fetch job from proxy", "error", err)
+		return "", fmt.Errorf("failed to send registration request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("registration failed with status: %s", resp.Status)
+	}
+
+	var payload struct {
+		WorkerID string `json:"worker_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", fmt.Errorf("failed to decode registration response: %w", err)
+	}
+	if payload.WorkerID == "" {
+		return "", errors.New("proxy did not return a worker_id")
+	}
+	return payload.WorkerID, nil
+}
+
+// runHeartbeat sends periodic heartbeats to the proxy.
+func runHeartbeat(proxyURL, workerID string) {
+	ticker := time.NewTicker(settings.HeartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		<-ticker.C
+		payload, _ := json.Marshal(map[string]string{"worker_id": workerID})
+		resp, err := httpClient.Post(proxyURL+"/internal/worker/heartbeat", "application/json", bytes.NewBuffer(payload))
+		if err != nil {
+			slog.Warn("failed to send heartbeat", "worker_id", workerID, "error", err)
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			slog.Warn("heartbeat request failed", "worker_id", workerID, "status", resp.Status)
+		}
+	}
+}
+
+// setupGracefulShutdown listens for OS signals and deregisters the worker.
+func setupGracefulShutdown(proxyURL, workerID string) {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		slog.Info("Shutdown signal received, deregistering worker...", "worker_id", workerID)
+		req, _ := http.NewRequest("POST", proxyURL+"/internal/worker/goodbye?worker_id="+workerID, nil)
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			slog.Error("failed to send deregister request", "worker_id", workerID, "error", err)
+		} else {
+			resp.Body.Close()
+		}
+		os.Exit(0)
+	}()
+}
+
+// fetchJob long-polls the proxy for the next available job.
+func fetchJob(proxyURL, workerID string) *api.Job {
+	slog.Debug("Polling for next job...", "worker_id", workerID)
+	reqURL := fmt.Sprintf("%s/internal/job/next?worker_id=%s", proxyURL, workerID)
+	resp, err := httpClient.Get(reqURL)
+	if err != nil {
+		slog.Error("Failed to fetch job from proxy", "error", err)
+		time.Sleep(2 * time.Second) // Wait before retrying if there's a connection error.
 		return nil
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNoContent {
-		// No job available, this is normal.
-		return nil
+		slog.Debug("No job available, polling again.", "worker_id", workerID)
+		return nil // Expected outcome of a long poll timeout.
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		slog.Error("proxy returned non-OK status for job fetch", "status", resp.Status)
+		slog.Error("Proxy returned non-OK status for job fetch", "status", resp.Status)
+		time.Sleep(5 * time.Second) // Wait a bit longer if the proxy is misbehaving.
 		return nil
 	}
 
 	var job api.Job
 	if err := json.NewDecoder(resp.Body).Decode(&job); err != nil {
-		slog.Error("failed to decode job from proxy response", "error", err)
+		slog.Error("Failed to decode job from proxy response", "error", err)
 		return nil
 	}
 	return &job
@@ -107,13 +197,11 @@ func runQuery(ctx context.Context, db *sql.DB, job *api.Job) (*api.JobResult, er
 	}
 	defer rows.Close()
 
-	// Get column names
 	columnNames, err := rows.Columns()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get columns: %w", err)
 	}
 
-	// Get column types
 	sqlColumnTypes, err := rows.ColumnTypes()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get column types: %w", err)
@@ -147,7 +235,6 @@ func runQuery(ctx context.Context, db *sql.DB, job *api.Job) (*api.JobResult, er
 
 		// Append scanned values to their respective column slices
 		for i, val := range values {
-			// Handle any type conversions if necessary, e.g., byte slices to strings
 			if b, ok := val.([]byte); ok {
 				val = string(b)
 			}
@@ -183,14 +270,6 @@ func enableProfiling(ctx context.Context, db *sql.DB, id string) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("failed to set profiling output: %w", err)
 	}
-
-	// ,"LATENCY":"true","EXTRA_INFO": "false", "OPERATOR_CARDINALITY": "false", "OPERATOR_TIMING": "false", "RESULT_SET_SIZE":"true", "ROWS_RETURNED":"true"
-	// customProfiling := `PRAGMA custom_profiling_settings = '{"CPU_TIME": "true","ROWS_RETURNED": "true"}';`
-	//_, err = db.ExecContext(ctx, customProfiling)
-	//if err != nil {
-	//	return "", fmt.Errorf("failed to set custom profiling: %w", err)
-	//}
-
 	return profileFileName, nil
 }
 
@@ -202,26 +281,16 @@ func disableProfiling(ctx context.Context, db *sql.DB) error {
 }
 
 func collectProfileStats(profileFileName string) []byte {
-	if _, err := os.Stat(profileFileName); os.IsNotExist(err) {
-		slog.Warn("Profiling file does not exist", "file", profileFileName)
-	} else if err != nil {
-		slog.Warn("Error stating profiling file", "file", profileFileName, "error", err)
-	}
-
-	// Read profiling output
 	profileBytes, err := os.ReadFile(profileFileName)
 	if err != nil {
 		slog.Warn("failed to read profiling output file", "file", profileFileName, "error", err)
 	}
-
-	// Clean up profiling file
 	if err := os.Remove(profileFileName); err != nil {
 		slog.Warn("failed to remove profiling output file", "file", profileFileName, "error", err)
 	}
 	return profileBytes
 }
 
-// ExecuteJob runs the query using DuckDB.
 func ExecuteJob(ctx context.Context, job *api.Job, dbPath string) (*api.JobResult, error) {
 	db, err := sql.Open("duckdb", dbPath)
 	if err != nil {
@@ -251,7 +320,6 @@ func ExecuteJob(ctx context.Context, job *api.Job, dbPath string) (*api.JobResul
 	return result, runSqlErr
 }
 
-// submitResult sends the result of a job execution back to the proxy.
 func submitResult(proxyURL, jobID string, result *api.JobResult) {
 	payload := map[string]interface{}{
 		"job_id": jobID,
@@ -264,7 +332,7 @@ func submitResult(proxyURL, jobID string, result *api.JobResult) {
 		return
 	}
 
-	resp, err := http.Post(proxyURL+"/internal/result", "application/json", bytes.NewBuffer(body))
+	resp, err := httpClient.Post(proxyURL+"/internal/job/result", "application/json", bytes.NewBuffer(body))
 	if err != nil {
 		slog.Error("failed to submit result to proxy", "job_id", jobID, "error", err)
 		return

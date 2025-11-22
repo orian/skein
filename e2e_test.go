@@ -89,6 +89,7 @@ func TestEndToEndQueryExecution(t *testing.T) {
 		err = json.Unmarshal(respBody, &actualResult)
 		assert.NoError(t, err)
 		delete(actualResult, "profile")
+		delete(actualResult, "go_profile")
 		actualResultBytes, err := json.Marshal(actualResult)
 		assert.NoError(t, err)
 		assert.JSONEq(t, expectedJSON, string(actualResultBytes), "The JSON response should match the expected output.")
@@ -143,6 +144,7 @@ func TestEndToEndQueryExecution(t *testing.T) {
 		err = json.Unmarshal(respBody, &actualResult)
 		assert.NoError(t, err)
 		delete(actualResult, "profile")
+		delete(actualResult, "go_profile")
 		actualResultBytes, err := json.Marshal(actualResult)
 		assert.NoError(t, err)
 

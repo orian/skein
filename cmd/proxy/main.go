@@ -12,14 +12,22 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	jobQueue := proxy.NewJobQueue()
-	resultStore := proxy.NewResultStore()
-	p := proxy.NewProxy(jobQueue, resultStore)
+	// Instantiate the new worker registry.
+	registry := proxy.NewWorkerRegistry()
 
+	// The Proxy now holds the registry.
+	p := proxy.NewProxy(registry)
+
+	// User-facing and health-check endpoints.
 	http.HandleFunc("/query", p.QueryHandler)
-	http.HandleFunc("/internal/result", p.ResultHandler)
-	http.HandleFunc("/internal/job/next", p.JobDispatcherHandler)
 	http.HandleFunc("/healthz", p.HealthCheckHandler)
+
+	// Internal endpoints for worker communication.
+	http.HandleFunc("/internal/job/result", p.ResultHandler)
+	http.HandleFunc("/internal/job/next", p.JobDispatcherHandler)
+	http.HandleFunc("/internal/worker/register", p.RegisterWorkerHandler)
+	http.HandleFunc("/internal/worker/heartbeat", p.HeartbeatHandler)
+	http.HandleFunc("/internal/worker/goodbye", p.DeregisterWorkerHandler)
 
 	slog.Info("Proxy server starting on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
