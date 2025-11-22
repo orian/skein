@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	pollInterval = 2 * time.Second
+	pollInterval = 100 * time.Millisecond
 	dbPath       = "" // Use in-memory DuckDB
 )
 
@@ -183,6 +183,14 @@ func enableProfiling(ctx context.Context, db *sql.DB, id string) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("failed to set profiling output: %w", err)
 	}
+
+	// ,"LATENCY":"true","EXTRA_INFO": "false", "OPERATOR_CARDINALITY": "false", "OPERATOR_TIMING": "false", "RESULT_SET_SIZE":"true", "ROWS_RETURNED":"true"
+	// customProfiling := `PRAGMA custom_profiling_settings = '{"CPU_TIME": "true","ROWS_RETURNED": "true"}';`
+	//_, err = db.ExecContext(ctx, customProfiling)
+	//if err != nil {
+	//	return "", fmt.Errorf("failed to set custom profiling: %w", err)
+	//}
+
 	return profileFileName, nil
 }
 

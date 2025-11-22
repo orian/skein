@@ -29,11 +29,25 @@ func BenchmarkQueryExecution(b *testing.B) {
 	//parquetPath := getParquetPath()
 	parquetPath := "./datasets/taxi/taxi_2019_*.parquet"
 	query := fmt.Sprintf(`
-		SELECT count(*) as total_count, avg(passenger_count)
+		SELECT
+			rate_code_id,
+			payment_type,
+			count(*) as total_count,
+			avg(passenger_count) as avg_passengers,
+			avg(trip_distance) as avg_distance,
+			avg(total_amount) as avg_amount
 		FROM '%s'
-		WHERE (pickup_at BETWEEN '2019-04-15' AND '2019-04-20')
-			or (pickup_at BETWEEN '2019-05-18' AND '2019-04-25')
-			or (pickup_at BETWEEN '2019-06-01' AND '2019-06-06');
+		WHERE
+			(pickup_at BETWEEN '2019-04-01' AND '2019-06-30')
+			AND trip_distance > 1.0
+			AND passenger_count > 1
+			AND total_amount BETWEEN 5.0 AND 100.0
+		GROUP BY
+			rate_code_id,
+			payment_type
+		ORDER BY
+			rate_code_id,
+			payment_type;
 	`, parquetPath)
 
 	b.Run("CollectProfilingEnabled", func(b *testing.B) {
@@ -140,8 +154,8 @@ func printStats(name string, stats []CombinedStats) {
 		rowsReturned[i] = float64(s.ProfilingStats.RowsReturned)
 		latency[i] = s.ProfilingStats.Latency
 		cpuTime[i] = s.ProfilingStats.CPUTime
-		executeTime[i] = float64(s.GoProfileStats.ExecuteTime.Microseconds())
-		queryTime[i] = float64(s.GoProfileStats.QueryTime.Microseconds())
+		executeTime[i] = float64(s.GoProfileStats.ExecuteTime.Milliseconds())
+		queryTime[i] = float64(s.GoProfileStats.QueryTime.Milliseconds())
 	}
 
 	fmt.Printf("TotalBytesWritten: p50=%.2f, p99=%.2f\n", percentile(totalBytesWritten, 50), percentile(totalBytesWritten, 99))
@@ -149,8 +163,8 @@ func printStats(name string, stats []CombinedStats) {
 	fmt.Printf("RowsReturned:      p50=%.2f, p99=%.2f\n", percentile(rowsReturned, 50), percentile(rowsReturned, 99))
 	fmt.Printf("Latency:           p50=%.2f, p99=%.2f\n", percentile(latency, 50), percentile(latency, 99))
 	fmt.Printf("CPUTime:           p50=%.2f, p99=%.2f\n", percentile(cpuTime, 50), percentile(cpuTime, 99))
-	fmt.Printf("ExecuteTime:       p50=%.2fµs, p99=%.2fµs\n", percentile(executeTime, 50), percentile(executeTime, 99))
-	fmt.Printf("QueryTime:         p50=%.2fµs, p99=%.2fµs\n", percentile(queryTime, 50), percentile(queryTime, 99))
+	fmt.Printf("ExecuteTime:       p50=%.2fµs, p95=%.2fms, p99=%.2fms\n", percentile(executeTime, 50), percentile(executeTime, 95), percentile(executeTime, 99))
+	fmt.Printf("QueryTime:         p50=%.2fµs, p95=%.2fms, p99=%.2fms\n", percentile(queryTime, 50), percentile(queryTime, 95), percentile(queryTime, 99))
 }
 
 func percentile(data []float64, perc float64) float64 {
