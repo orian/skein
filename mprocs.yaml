@@ -1,0 +1,8 @@
+procs:
+  proxy:
+    cmd: ["go", "run", "cmd/proxy/main.go"]
+  worker:
+    cmd: ["go", "run", "cmd/worker/main.go"]
+    env:
+      PROXY_BASE_URL: http://localhost:8080
+      WORKER_DELAY: 0s
