@@ -12,8 +12,9 @@ type ProfilingStats struct {
 }
 
 type GoProfileStats struct {
-	ExecuteTime time.Duration
-	QueryTime   time.Duration
+	ExecuteTime       time.Duration
+	QueryTime         time.Duration
+	DispatchLatencyMs int64
 }
 
 // QueryResults is the structure of the data returned to the API user.

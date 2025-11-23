@@ -31,6 +31,7 @@ var httpClient = &http.Client{
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+	slog.SetLogLoggerLevel(slog.LevelDebug)
 
 	proxyURL := os.Getenv("PROXY_BASE_URL")
 	if proxyURL == "" {
@@ -64,7 +65,8 @@ func main() {
 			continue
 		}
 
-		slog.Info("Executing job", "event", "query.execution.started", "job_id", job.ID, "worker_id", workerID)
+		slog.Info("Executing job", "event", "query.execution.started", "job_id", job.ID,
+			"worker_id", workerID)
 		startTime := time.Now()
 		result, err := ExecuteJob(context.Background(), job, dbPath)
 		duration := time.Since(startTime)
@@ -75,10 +77,12 @@ func main() {
 		result.GoProfile.ExecuteTime = duration
 
 		if err != nil {
-			slog.Error("Job execution failed", "event", "query.execution.failed", "job_id", job.ID, "worker_id", workerID, "error", err)
+			slog.Error("Job execution failed", "event", "query.execution.failed", "job_id", job.ID,
+				"worker_id", workerID, "error", err)
 			result.Error = err.Error()
 		} else {
-			slog.Info("Job execution completed", "event", "query.execution.completed", "job_id", job.ID, "worker_id", workerID, "duration_ms", duration.Milliseconds())
+			slog.Info("Job execution completed", "event", "query.execution.completed", "job_id", job.ID,
+				"worker_id", workerID, "duration_ms", duration.Milliseconds())
 		}
 
 		if workerDelay > 0 {
@@ -155,7 +159,7 @@ func setupGracefulShutdown(proxyURL, workerID string) {
 
 // fetchJob long-polls the proxy for the next available job.
 func fetchJob(proxyURL, workerID string) *api.Job {
-	slog.Debug("Polling for next job...", "worker_id", workerID)
+	slog.Info("Polling for next job...", "worker_id", workerID)
 	reqURL := fmt.Sprintf("%s/internal/job/next?worker_id=%s", proxyURL, workerID)
 	resp, err := httpClient.Get(reqURL)
 	if err != nil {

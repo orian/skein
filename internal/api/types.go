@@ -48,6 +48,7 @@ type Job struct {
 	Priority         Priority               `json:"priority"`
 	Status           JobStatus              `json:"status"`
 	CreatedAt        time.Time              `json:"created_at"`
+	DispatchedAt     time.Time              `json:"dispatched_at"`
 	UpdatedAt        time.Time              `json:"updated_at"`
 	Result           *JobResult             `json:"result,omitempty"`
 	DisableProfiling bool                   `json:"disable_profiling,omitempty"`

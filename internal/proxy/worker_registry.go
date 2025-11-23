@@ -35,7 +35,7 @@ func NewWorkerHandler() *WorkerHandler {
 		ID: uuid.NewString(),
 		// A buffered channel of 1 allows the registry to send a job without blocking
 		// while the worker's long poll request might be in flight.
-		JobChannel:    make(chan *api.Job, 1),
+		JobChannel:    make(chan *api.Job, 0),
 		ready:         false,
 		lastHeartbeat: time.Now().UTC(),
 	}

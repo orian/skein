@@ -12,11 +12,13 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	// Instantiate the new worker registry.
+	// Instantiate the new worker registry and the old queue systems.
 	registry := proxy.NewWorkerRegistry()
+	jobQueue := proxy.NewJobQueue()
+	resultStore := proxy.NewResultStore()
 
-	// The Proxy now holds the registry.
-	p := proxy.NewProxy(registry)
+	// The Proxy now holds all dispatching and result systems.
+	p := proxy.NewProxy(registry, jobQueue, resultStore)
 
 	// User-facing and health-check endpoints.
 	http.HandleFunc("/query", p.QueryHandler)

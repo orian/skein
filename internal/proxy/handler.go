@@ -20,14 +20,16 @@ const (
 // Proxy holds the dependencies for the proxy server.
 type Proxy struct {
 	registry    *WorkerRegistry
+	jobQueue    *JobQueue
 	resultStore *ResultStore
 }
 
 // NewProxy creates a new Proxy instance.
-func NewProxy(registry *WorkerRegistry) *Proxy {
+func NewProxy(registry *WorkerRegistry, jobQueue *JobQueue, resultStore *ResultStore) *Proxy {
 	return &Proxy{
 		registry:    registry,
-		resultStore: NewResultStore(),
+		jobQueue:    jobQueue,
+		resultStore: resultStore,
 	}
 }
 
@@ -101,34 +103,39 @@ func (p *Proxy) JobDispatcherHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	handler.UpdateHeartbeat()
 
-	// Mark worker as ready and defer setting it to not ready.
-	handler.SetReady(true)
-	defer handler.SetReady(false)
-	slog.Debug("worker is ready and waiting for a job", "worker_id", workerID)
-
 	var (
 		job     *api.Job
 		timeout bool
 	)
-	select {
-	case job = <-handler.JobChannel:
-		slog.Info("dispatching job to worker", "event", "query.assigned", "job_id", job.ID, "worker_id", workerID)
-	case <-time.After(settings.LongPollTimeout):
-		slog.Debug("long poll timeout", "worker_id", workerID, "error", r.Context().Err())
-		timeout = true
-	case <-r.Context().Done():
-		slog.Debug("worker request context done", "worker_id", workerID, "error", r.Context().Err())
-		timeout = true
-	}
-	if timeout {
+
+	job = p.jobQueue.Get()
+	if job == nil {
+		// Mark worker as ready and defer setting it to not ready.
+		handler.SetReady(true)
+		defer handler.SetReady(false)
+		slog.Debug("worker is ready and waiting for a job", "worker_id", workerID)
+
 		select {
-		case job, ok = <-handler.JobChannel:
-			slog.Info("last minute catch, worker channel not empty, dispatching job anyway", "worker_id", workerID, "job_id", job.ID)
-		default:
+		case job = <-handler.JobChannel:
+			slog.Info("dispatching job to worker", "event", "query.assigned", "job_id", job.ID, "worker_id", workerID)
+		case <-time.After(settings.LongPollTimeout):
+			slog.Debug("long poll timeout", "worker_id", workerID, "error", r.Context().Err())
+			timeout = true
+		case <-r.Context().Done():
+			slog.Debug("worker request context done", "worker_id", workerID, "error", r.Context().Err())
+			timeout = true
+		}
+		if timeout {
+			select {
+			case job, ok = <-handler.JobChannel:
+				slog.Info("last minute catch, worker channel not empty, dispatching job anyway", "worker_id", workerID, "job_id", job.ID)
+			default:
+			}
 		}
 	}
 	if job != nil {
 		job.Status = api.StatusRunning
+		job.DispatchedAt = time.Now().UTC()
 		job.UpdatedAt = time.Now().UTC()
 
 		w.Header().Set("Content-Type", "application/json")
@@ -176,13 +183,13 @@ func (p *Proxy) QueryHandler(w http.ResponseWriter, r *http.Request) {
 	defer p.resultStore.Deregister(job.ID)
 
 	// Create a context for dispatching.
-	dispatchCtx, cancel := context.WithTimeout(r.Context(), requestTimeout)
+	dispatchCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second) // Short timeout for dispatch attempt
 	defer cancel()
 
 	if err := p.registry.Dispatch(dispatchCtx, job); err != nil {
-		slog.Error("failed to dispatch job", "job_id", job.ID, "error", err)
-		http.Error(w, "Failed to dispatch job: "+err.Error(), http.StatusServiceUnavailable)
-		return
+		// If dispatch fails (e.g., no workers), add to the fallback queue.
+		slog.Warn("direct dispatch failed, adding to fallback queue", "job_id", job.ID, "error", err)
+		p.jobQueue.Add(job)
 	}
 
 	// Wait for the result or a timeout.
@@ -216,8 +223,9 @@ func (p *Proxy) QueryHandler(w http.ResponseWriter, r *http.Request) {
 				CPUTime:           duckdbProfile.CPUTime,
 			},
 			GoProfile: api.GoProfileStats{
-				ExecuteTime: result.GoProfile.ExecuteTime,
-				QueryTime:   result.GoProfile.QueryTime,
+				ExecuteTime:       result.GoProfile.ExecuteTime,
+				QueryTime:         result.GoProfile.QueryTime,
+				DispatchLatencyMs: job.DispatchedAt.Sub(job.CreatedAt).Milliseconds(),
 			},
 		}
 
