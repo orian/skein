@@ -1,8 +1,8 @@
 procs:
   proxy:
-    cmd: ["go", "run", "cmd/proxy/main.go"]
+    cmd: ["go", "run", "skein/cmd/proxy"]
   worker:
-    cmd: ["go", "run", "cmd/worker/main.go"]
+    cmd: ["go", "run", "skein/cmd/worker"]
     env:
       PROXY_BASE_URL: http://localhost:8080
       WORKER_DELAY: 0s
